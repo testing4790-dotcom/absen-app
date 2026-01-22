@@ -12,7 +12,6 @@ app.use(express.json());
 
 // health
 app.get("/api/health", async (req, res) => {
-  // cek koneksi db juga
   try {
     const r = await pool.query("SELECT 1 as ok");
     res.json({ ok: true, message: "API is healthy", db: r.rows?.[0]?.ok === 1 });
@@ -21,7 +20,7 @@ app.get("/api/health", async (req, res) => {
   }
 });
 
-// helper buat token
+// helper token
 function signToken(user) {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role, name: user.name },
@@ -31,13 +30,8 @@ function signToken(user) {
 }
 
 /**
- * Bootstrap admin pertama (sekali saja)
- * Endpoint ini akan:
- * - jika belum ada user sama sekali, bikin admin dari body
- * - jika sudah ada user, endpoint ditolak
- *
+ * Bootstrap admin pertama
  * POST /api/bootstrap-admin
- * body: { name, email, password }
  */
 app.post("/api/bootstrap-admin", async (req, res) => {
   const { name, email, password } = req.body || {};
@@ -62,10 +56,19 @@ app.post("/api/bootstrap-admin", async (req, res) => {
 });
 
 /**
- * Admin create user
+ * Admin: Get all users
+ * GET /api/users
+ */
+app.get("/api/users", requireAuth, requireRole("admin"), async (req, res) => {
+  const r = await pool.query(
+    "SELECT id, name, email, role, created_at FROM users ORDER BY created_at DESC"
+  );
+  res.json({ ok: true, users: r.rows });
+});
+
+/**
+ * Admin: Create user
  * POST /api/users
- * header: Authorization: Bearer <token-admin>
- * body: { name, email, password, role? }
  */
 app.post("/api/users", requireAuth, requireRole("admin"), async (req, res) => {
   const { name, email, password, role } = req.body || {};
@@ -73,19 +76,40 @@ app.post("/api/users", requireAuth, requireRole("admin"), async (req, res) => {
     return res.status(400).json({ ok: false, message: "name, email, password required" });
   }
 
-  const password_hash = await bcrypt.hash(password, 10);
-  const r = await pool.query(
-    "INSERT INTO users(name, email, password_hash, role) VALUES($1,$2,$3,$4) RETURNING id,name,email,role",
-    [name, email.toLowerCase(), password_hash, role === "admin" ? "admin" : "user"]
-  );
+  try {
+    const password_hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      "INSERT INTO users(name, email, password_hash, role) VALUES($1,$2,$3,$4) RETURNING id,name,email,role",
+      [name, email.toLowerCase(), password_hash, role === "admin" ? "admin" : "user"]
+    );
+    res.json({ ok: true, user: r.rows[0] });
+  } catch (e) {
+    if (e.code === "23505") {
+      return res.status(400).json({ ok: false, message: "Email sudah terdaftar" });
+    }
+    throw e;
+  }
+});
 
-  res.json({ ok: true, user: r.rows[0] });
+/**
+ * Admin: Delete user
+ * DELETE /api/users/:id
+ */
+app.delete("/api/users/:id", requireAuth, requireRole("admin"), async (req, res) => {
+  const { id } = req.params;
+  
+  // jangan hapus diri sendiri
+  if (parseInt(id) === req.user.id) {
+    return res.status(400).json({ ok: false, message: "Tidak bisa hapus diri sendiri" });
+  }
+
+  await pool.query("DELETE FROM users WHERE id = $1", [id]);
+  res.json({ ok: true, message: "User deleted" });
 });
 
 /**
  * Login
  * POST /api/auth/login
- * body: { email, password }
  */
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body || {};
@@ -118,12 +142,10 @@ app.get("/api/auth/me", requireAuth, async (req, res) => {
 /**
  * Check-in
  * POST /api/attendance/check-in
- * body: { note? }
  */
 app.post("/api/attendance/check-in", requireAuth, async (req, res) => {
   const { note } = req.body || {};
 
-  // pastikan belum ada sesi absen yang belum check-out
   const open = await pool.query(
     `SELECT id FROM attendance
      WHERE user_id=$1 AND check_out IS NULL
@@ -131,7 +153,7 @@ app.post("/api/attendance/check-in", requireAuth, async (req, res) => {
     [req.user.id]
   );
   if (open.rows[0]) {
-    return res.status(400).json({ ok: false, message: "You already checked-in and not checked-out yet." });
+    return res.status(400).json({ ok: false, message: "Anda sudah check-in, silakan check-out dulu." });
   }
 
   const r = await pool.query(
@@ -155,7 +177,7 @@ app.post("/api/attendance/check-out", requireAuth, async (req, res) => {
     [req.user.id]
   );
   if (!open.rows[0]) {
-    return res.status(400).json({ ok: false, message: "No active check-in found." });
+    return res.status(400).json({ ok: false, message: "Tidak ada check-in aktif." });
   }
 
   const r = await pool.query(
@@ -183,6 +205,26 @@ app.get("/api/attendance/history", requireAuth, async (req, res) => {
      ORDER BY check_in DESC
      LIMIT $2`,
     [req.user.id, limit]
+  );
+
+  res.json({ ok: true, items: r.rows });
+});
+
+/**
+ * Admin: Get all attendance (semua user)
+ * GET /api/attendance/all?limit=100
+ */
+app.get("/api/attendance/all", requireAuth, requireRole("admin"), async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || "100", 10), 500);
+
+  const r = await pool.query(
+    `SELECT a.id, a.user_id, u.name AS user_name, u.email AS user_email,
+            a.check_in, a.check_out, a.note
+     FROM attendance a
+     JOIN users u ON u.id = a.user_id
+     ORDER BY a.check_in DESC
+     LIMIT $1`,
+    [limit]
   );
 
   res.json({ ok: true, items: r.rows });
