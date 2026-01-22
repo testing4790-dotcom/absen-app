@@ -1,13 +1,11 @@
 import jwt from "jsonwebtoken";
 
 export function requireAuth(req, res, next) {
-  // Cek header dulu, lalu query param (untuk download link)
   const header = req.headers.authorization || "";
   let token = header.startsWith("Bearer ") ? header.slice(7) : null;
-  
-  if (!token && req.query.token) {
-    token = req.query.token;
-  }
+
+  // untuk download file (window.open) biasanya lebih mudah pakai query token
+  if (!token && req.query.token) token = req.query.token;
 
   if (!token) return res.status(401).json({ ok: false, message: "Unauthorized" });
 
