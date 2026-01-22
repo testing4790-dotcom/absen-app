@@ -1,6 +1,7 @@
 import { pool } from "./index.js";
 
 async function main() {
+  // Tabel users
   await pool.query(`
     CREATE TABLE IF NOT EXISTS users (
       id SERIAL PRIMARY KEY,
@@ -12,6 +13,7 @@ async function main() {
     );
   `);
 
+  // Tabel attendance
   await pool.query(`
     CREATE TABLE IF NOT EXISTS attendance (
       id SERIAL PRIMARY KEY,
@@ -23,7 +25,29 @@ async function main() {
     );
   `);
 
-  // index kecil supaya query history cepat
+  // Tambah kolom baru (GPS + Photo) jika belum ada
+  await pool.query(`
+    DO $$ 
+    BEGIN
+      BEGIN
+        ALTER TABLE attendance ADD COLUMN latitude DOUBLE PRECISION;
+      EXCEPTION
+        WHEN duplicate_column THEN NULL;
+      END;
+      BEGIN
+        ALTER TABLE attendance ADD COLUMN longitude DOUBLE PRECISION;
+      EXCEPTION
+        WHEN duplicate_column THEN NULL;
+      END;
+      BEGIN
+        ALTER TABLE attendance ADD COLUMN photo TEXT;
+      EXCEPTION
+        WHEN duplicate_column THEN NULL;
+      END;
+    END $$;
+  `);
+
+  // Index
   await pool.query(`
     CREATE INDEX IF NOT EXISTS attendance_user_id_check_in_idx
     ON attendance(user_id, check_in DESC);
